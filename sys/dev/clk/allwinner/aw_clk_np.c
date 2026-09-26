@@ -96,6 +96,26 @@ aw_clk_np_set_gate(struct clknode *clk, bool enable)
 	return (0);
 }
 
+static int
+aw_clk_np_get_gate(struct clknode *clk, bool *enabled)
+{
+	struct aw_clk_np_sc *sc;
+	uint32_t val;
+
+	sc = clknode_get_softc(clk);
+
+	if ((sc->flags & AW_CLK_HAS_GATE) == 0)
+		return (ENOENT);
+
+	DEVICE_LOCK(clk);
+	READ4(clk, sc->offset, &val);
+	DEVICE_UNLOCK(clk);
+
+	*enabled = (val & (1 << sc->gate_shift)) != 0;
+
+	return (0);
+}
+
 static uint64_t
 aw_clk_np_find_best(struct aw_clk_np_sc *sc, uint64_t fparent, uint64_t *fout,
     uint32_t *factor_n, uint32_t *factor_p)
@@ -212,6 +232,7 @@ static clknode_method_t aw_np_clknode_methods[] = {
 	/* Device interface */
 	CLKNODEMETHOD(clknode_init,		aw_clk_np_init),
 	CLKNODEMETHOD(clknode_set_gate,		aw_clk_np_set_gate),
+	CLKNODEMETHOD(clknode_get_gate,		aw_clk_np_get_gate),
 	CLKNODEMETHOD(clknode_recalc_freq,	aw_clk_np_recalc),
 	CLKNODEMETHOD(clknode_set_freq,		aw_clk_np_set_freq),
 	CLKNODEMETHOD_END
