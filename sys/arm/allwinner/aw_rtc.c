@@ -41,6 +41,7 @@
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
+#include <dev/clk/clk.h>
 #include <dev/clk/clk_fixed.h>
 
 #include <arm/allwinner/aw_machdep.h>
@@ -55,6 +56,9 @@
 #define	A31_RTC_TIME_REG		0x14
 
 #define	TIME_MASK			0x001f3f3f
+
+#define	LOSC_OUT_GATING_REG		0x60
+#define	LOSC_OUT_GATING_EN		(1 << 0)
 
 #define	LOSC_OSC_SRC			(1 << 0)
 #define	LOSC_GSM			(1 << 3)
@@ -146,6 +150,49 @@ struct aw_rtc_softc {
 	struct aw_rtc_conf	*conf;
 	int			type;
 };
+
+/*
+ * CLK_OSC32K_FANOUT (id 1): the gated 32.768 kHz output on the X32KFOUT pad,
+ * which boards route to the LPO input of an on-board WiFi/Bluetooth module.
+ * The gate is LOSC_OUT_GATING bit 0; it is in the always-on RTC domain and
+ * survives a warm reset.
+ */
+struct aw_rtc_fanout_sc {
+	struct aw_rtc_softc	*rtc_sc;
+};
+
+static int
+aw_rtc_fanout_init(struct clknode *clk, device_t dev)
+{
+
+	clknode_init_parent_idx(clk, 0);
+	return (0);
+}
+
+static int
+aw_rtc_fanout_set_gate(struct clknode *clk, bool enable)
+{
+	struct aw_rtc_fanout_sc *sc;
+	uint32_t val;
+
+	sc = clknode_get_softc(clk);
+	val = RTC_READ(sc->rtc_sc, LOSC_OUT_GATING_REG);
+	if (enable)
+		val |= LOSC_OUT_GATING_EN;
+	else
+		val &= ~LOSC_OUT_GATING_EN;
+	RTC_WRITE(sc->rtc_sc, LOSC_OUT_GATING_REG, val);
+
+	return (0);
+}
+
+static clknode_method_t aw_rtc_fanout_methods[] = {
+	CLKNODEMETHOD(clknode_init,		aw_rtc_fanout_init),
+	CLKNODEMETHOD(clknode_set_gate,		aw_rtc_fanout_set_gate),
+	CLKNODEMETHOD_END
+};
+DEFINE_CLASS_1(aw_rtc_fanout_clknode, aw_rtc_fanout_class,
+    aw_rtc_fanout_methods, sizeof(struct aw_rtc_fanout_sc), clknode_class);
 
 static struct clk_fixed_def aw_rtc_osc32k = {
 	.clkdef.id = 0,
@@ -246,12 +293,42 @@ aw_rtc_detach(device_t dev)
 	return (EBUSY);
 }
 
+static int
+aw_rtc_register_fanout(struct clkdom *clkdom, struct aw_rtc_softc *sc,
+    const char *name)
+{
+	struct clknode_init_def def;
+	struct aw_rtc_fanout_sc *fsc;
+	struct clknode *clk;
+	const char *parent;
+
+	memset(&def, 0, sizeof(def));
+	def.id = 1;
+	def.name = name;
+	parent = aw_rtc_osc32k.clkdef.name;
+	def.parent_names = &parent;
+	def.parent_cnt = 1;
+
+	clk = clknode_create(clkdom, &aw_rtc_fanout_class, &def);
+	if (clk == NULL)
+		return (ENXIO);
+
+	fsc = clknode_get_softc(clk);
+	fsc->rtc_sc = sc;
+	clknode_register(clkdom, clk);
+
+	return (0);
+}
+
 static void
 aw_rtc_install_clocks(struct aw_rtc_softc *sc, device_t dev) {
 	struct clkdom *clkdom;
 	const char **clknames;
+	const char *fanout_name;
 	phandle_t node;
 	int nclocks;
+
+	fanout_name = "osc32k-out";
 
 	node = ofw_bus_get_node(dev);
 
@@ -273,6 +350,7 @@ aw_rtc_install_clocks(struct aw_rtc_softc *sc, device_t dev) {
 		}
 
 		aw_rtc_osc32k.clkdef.name = clknames[0];
+		fanout_name = clknames[1];
 		aw_rtc_iosc.clkdef.name = clknames[2];
 	}
 
@@ -280,6 +358,9 @@ aw_rtc_install_clocks(struct aw_rtc_softc *sc, device_t dev) {
 
 	if (clknode_fixed_register(clkdom, &aw_rtc_osc32k) != 0)
 		device_printf(dev, "Cannot register osc32k clock\n");
+
+	if (aw_rtc_register_fanout(clkdom, sc, fanout_name) != 0)
+		device_printf(dev, "Cannot register %s clock\n", fanout_name);
 
 	aw_rtc_iosc.freq = sc->conf->iosc_freq;
 	if (clknode_fixed_register(clkdom, &aw_rtc_iosc) != 0)
