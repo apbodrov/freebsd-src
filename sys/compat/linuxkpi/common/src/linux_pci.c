@@ -223,6 +223,15 @@ err:
 	return (error);
 }
 
+/*
+ * busdma bounds a non-coherent map's sync list by nsegments, and
+ * linux_dma_map_sg_attrs() loads every S/G entry into one map, so with
+ * nsegments == 1 any physically discontiguous S/G list fails with EFBIG.
+ * The sync list only grows on a discontiguity; 1024 covers a fully
+ * fragmented 4 MiB list.
+ */
+#define	LINUX_DMA_TAG_NSEGMENTS	1024
+
 int
 linux_dma_tag_init(struct device *dev, u64 dma_mask)
 {
@@ -246,7 +255,7 @@ linux_dma_tag_init(struct device *dev, u64 dma_mask)
 	    BUS_SPACE_MAXADDR,		/* highaddr */
 	    NULL, NULL,			/* filtfunc, filtfuncarg */
 	    BUS_SPACE_MAXSIZE,		/* maxsize */
-	    1,				/* nsegments */
+	    LINUX_DMA_TAG_NSEGMENTS,	/* nsegments */
 	    BUS_SPACE_MAXSIZE,		/* maxsegsz */
 	    0,				/* flags */
 	    NULL, NULL,			/* lockfunc, lockfuncarg */
