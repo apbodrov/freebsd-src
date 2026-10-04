@@ -2122,6 +2122,8 @@ linux_dma_map_sg_attrs(struct device *dev, struct scatterlist *sgl, int nents,
 
 	/* create common DMA map in the first S/G entry */
 	if (bus_dmamap_create(priv->dmat, 0, &sgl->dma_map) != 0) {
+		/* bus_dmamap_create() may fail without writing the map. */
+		sgl->dma_map = NULL;
 		DMA_PRIV_UNLOCK(priv);
 		return (0);
 	}
@@ -2134,6 +2136,7 @@ linux_dma_map_sg_attrs(struct device *dev, struct scatterlist *sgl, int nents,
 		    &seg, &nseg) != 0) {
 			bus_dmamap_unload(priv->dmat, sgl->dma_map);
 			bus_dmamap_destroy(priv->dmat, sgl->dma_map);
+			sgl->dma_map = NULL;
 			DMA_PRIV_UNLOCK(priv);
 			return (0);
 		}
@@ -2177,6 +2180,10 @@ linux_dma_unmap_sg_attrs(struct device *dev, struct scatterlist *sgl,
 
 	priv = dev->dma_priv;
 
+	/* Nothing to do if the map failed or was already unmapped. */
+	if (sgl->dma_map == NULL)
+		return;
+
 	DMA_PRIV_LOCK(priv);
 
 	if ((attrs & DMA_ATTR_SKIP_CPU_SYNC) != 0)
@@ -2200,6 +2207,7 @@ skip_sync:
 
 	bus_dmamap_unload(priv->dmat, sgl->dma_map);
 	bus_dmamap_destroy(priv->dmat, sgl->dma_map);
+	sgl->dma_map = NULL;
 	DMA_PRIV_UNLOCK(priv);
 }
 
